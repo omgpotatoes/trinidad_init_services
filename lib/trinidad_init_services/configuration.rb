@@ -8,7 +8,7 @@ require 'shellwords'
 module Trinidad
   module InitServices
     class Configuration
-      
+
       def self.windows?
         RbConfig::CONFIG['host_os'] =~ /mswin|mingw/i
       end
@@ -16,17 +16,18 @@ module Trinidad
       def self.macosx?
         RbConfig::CONFIG['host_os'] =~ /darwin/i
       end
-      
+
       def initialize(stdin = STDIN, stdout = STDOUT)
         @stdin, @stdout = stdin, stdout
       end
 
-      def initialize_paths(jruby_home = default_jruby_home)
+      def initialize_paths(jruby_home = default_jruby_home, custom_classpath = nil)
         @trinidad_daemon_path = File.expand_path('../../trinidad/daemon.rb', __FILE__)
         @jars_path = File.expand_path('../../../trinidad-libs', __FILE__)
 
         @classpath = ['jruby-jsvc.jar', 'commons-daemon.jar'].map { |jar| File.join(@jars_path, jar) }
         @classpath << File.join(jruby_home, 'lib', 'jruby.jar')
+        @classpath << custom_classpath if custom_classpath
       end
 
       def configure(defaults = {})
@@ -41,7 +42,7 @@ module Trinidad
         @jruby_home = defaults["jruby_home"] || ask_path('JRuby home', default_jruby_home)
         @ruby_compat_version = defaults["ruby_compat_version"] || ask('Ruby 1.8.x or 1.9.x compatibility', default_ruby_compat_version)
         @jruby_opts = configure_jruby_opts
-        initialize_paths(@jruby_home)
+        initialize_paths(@jruby_home, defaults['classpath'])
 
         message = windows? ? configure_windows_service : configure_unix_daemon(defaults)
         say message if message.is_a?(String)
@@ -56,7 +57,7 @@ module Trinidad
         opts << "-Djruby.compat.version=#{@ruby_compat_version}"
         opts
       end
-      
+
       def configure_unix_daemon(defaults)
         @java_home = defaults["java_home"] || ask_path('Java home', default_java_home)
         unless @jsvc = defaults["jsvc_path"] || detect_jsvc_path
@@ -64,7 +65,7 @@ module Trinidad
           if @jsvc.empty? # unpack and compile :
             jsvc_unpack_dir = defaults["jsvc_unpack_dir"] || ask_path("dir where jsvc dist should be unpacked", '/usr/local/src')
             @jsvc = compile_jsvc(jsvc_unpack_dir, @java_home)
-            say "jsvc binary available at: #{@jsvc} " + 
+            say "jsvc binary available at: #{@jsvc} " +
                  "(consider adding it to $PATH if you plan to re-run trinidad_init_service)"
           end
         end
@@ -72,16 +73,16 @@ module Trinidad
         @pid_file = defaults["pid_file"] || ask_path('pid file', '/var/run/trinidad/trinidad.pid')
         @log_file = defaults["log_file"] || ask_path('log file', '/var/log/trinidad/trinidad.log')
         @run_user = defaults["run_user"] || ask('run daemon as user (enter a non-root username or leave blank)', '')
-        
+
         if @run_user != '' && `id -u #{@run_user}` == ''
           raise ArgumentError, "user '#{@run_user}' does not exist (leave blank if you're planning to `useradd' later)"
         end
-        
+
         @pid_file = File.join(@pid_file, 'trinidad.pid') if File.exist?(@pid_file) && File.directory?(@pid_file)
         make_path_dir(@pid_file, "could not create dir for '#{@pid_file}', make sure dir exists before running daemon")
         @log_file = File.join(@log_file, 'trinidad.log') if File.exist?(@log_file) && File.directory?(@log_file)
         make_path_dir(@log_file, "could not create dir for '#{@log_file}', make sure dir exists before running daemon")
-        
+
         daemon = ERB.new(
           File.read(
             File.expand_path('../../init.d/trinidad.erb', File.dirname(__FILE__))
@@ -92,7 +93,7 @@ module Trinidad
         trinidad_file = File.join(@output_path, "trinidad")
         File.open(trinidad_file, 'w') { |file| file.write(daemon) }
         FileUtils.chmod(@run_user == '' ? 0744 : 0755, trinidad_file)
-        
+
         "\nNOTE: you might want to: `[sudo] update-rc.d -f #{@output_path} defaults`"
       end
 
@@ -110,7 +111,7 @@ module Trinidad
         desc_default = 'Embedded Apache Tomcat running Rack and Rails applications'
         @trinidad_service_desc = defaults["trinidad_service_desc"] || ask(desc_ask, desc_default)
       end
-      
+
       def configure_windows_service
         srv_path = detect_prunsrv_path
 
@@ -125,7 +126,7 @@ module Trinidad
 ++JvmOptions="#{format_options(@jruby_opts)}"
 }
         system "#{srv_path} #{command}"
-        
+
         "\nNOTE: you may use prunsrv to manage your service, try running:\n" +
         "#{srv_path} help"
       end
@@ -133,7 +134,7 @@ module Trinidad
       def uninstall(service)
         windows? ? uninstall_windows_service(service) : uninstall_unix_daemon(service)
       end
-      
+
       def uninstall_windows_service(service_name)
         srv_path = detect_prunsrv_path
         system "#{srv_path} stop #{service_name}"
@@ -153,13 +154,13 @@ module Trinidad
         end
         FileUtils.rm(service) if File.exist?(service)
       end
-      
+
       private
 
       def escape_path(path)
         path.gsub(%r{/}, '\\')
       end
-      
+
       def format_options(options)
         options.map { |opt| escape_path(opt) }.join(';')
       end
@@ -171,11 +172,11 @@ module Trinidad
       def default_java_home
         ENV['JAVA_HOME'] || Java::JavaLang::System.get_property("java.home")
       end
-      
+
       def default_ruby_compat_version
         JRuby.runtime.is1_9 ? "RUBY1_9" : "RUBY1_8"
       end
-      
+
       def windows?
         self.class.windows?
       end
@@ -183,11 +184,11 @@ module Trinidad
       def macosx?
         self.class.macosx?
       end
-      
+
       def bundled_jsvc_path # only called on *nix
         jsvc = 'jsvc_' + (macosx? ? 'darwin' : 'linux')
         jsvc_path = File.join(@jars_path, jsvc)
-        # linux version is no longer bundled - as long as it is not present jsvc 
+        # linux version is no longer bundled - as long as it is not present jsvc
         # will be compiled from src (if not installed already #detect_jsvc_path)
         File.exist?(jsvc_path) ? jsvc_path : nil
       end
@@ -197,7 +198,7 @@ module Trinidad
         jsvc_path.chomp!
         jsvc_path.empty? ? bundled_jsvc_path : jsvc_path
       end
-      
+
       def compile_jsvc(jsvc_unpack_dir, java_home = default_java_home)
         unless File.exist?(jsvc_unpack_dir)
           begin
@@ -212,10 +213,10 @@ module Trinidad
         unless File.writable?(jsvc_unpack_dir)
           raise "specified path: #{jsvc_unpack_dir.inspect} is not writable"
         end
-        
+
         jsvc_unix_src = File.expand_path('../../jsvc-unix-src', File.dirname(__FILE__))
         FileUtils.cp_r(jsvc_unix_src, jsvc_unpack_dir)
-        
+
         jsvc_dir = File.expand_path('jsvc-unix-src', jsvc_unpack_dir)
         File.chmod(0755, File.join(jsvc_dir, "configure"))
         # ./configure
@@ -230,7 +231,7 @@ module Trinidad
           say command_output
           raise "`#{command}` failed with status: #{$?.exitstatus}"
         end
-        
+
         # make
         command = "cd #{jsvc_dir} && make"
         say "compiling jsvc ..."
@@ -239,10 +240,10 @@ module Trinidad
           say command_output
           raise "`#{command}` failed with status: #{$?.exitstatus}"
         end
-        
+
         File.expand_path('jsvc', jsvc_dir) # return path to compiled jsvc binary
       end
-      
+
       def detect_jdk_home(java_home = default_java_home)
         # JDK has an include directory with headers :
         if File.directory?(File.join(java_home, 'include'))
@@ -255,14 +256,14 @@ module Trinidad
         end
         nil
       end
-      
+
       def detect_prunsrv_path # only called on windows
         prunsrv_path = `for %i in (prunsrv.exe) do @echo.%~$PATH:i` rescue ''
         # a kind of `which prunsrv.exe` (if not found returns "\n")
         prunsrv_path.chomp!
         prunsrv_path.empty? ? bundled_prunsrv_path : prunsrv_path
       end
-      
+
       def bundled_prunsrv_path(arch = java.lang.System.getProperty("os.arch"))
         # "amd64", "i386", "x86", "x86_64"
         path = 'windows'
@@ -285,7 +286,7 @@ module Trinidad
           say "#{error} (#{e})"
         end
       end
-      
+
       def ask_path(question, default = nil)
         path = ask(question, default)
         unless path # nil, false
@@ -297,7 +298,7 @@ module Trinidad
 
       def ask(question, default = nil)
         return default if ! @stdin.tty? || @ask == false
-        
+
         question = "#{question}?" unless question.index('?')
         question += " [#{default}]" if default && ! default.empty?
 
@@ -318,21 +319,21 @@ module Trinidad
         end
         result
       end
-      
+
       def ask=(flag)
         @ask = !!flag
       end
       public :ask=
-      
+
       def say(msg)
         puts msg unless @say == false
       end
-      
+
       def say=(flag)
         @say = !!flag
       end
       public :say=
-      
+
     end
   end
 end
